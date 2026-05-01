@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '@iconify/react';
 import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css';
-import { DndContext, PointerSensor, useSensor, useSensors, useDroppable } from '@dnd-kit/core';
+import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
@@ -12,32 +12,27 @@ const columns = [
   { key: 'done', title: 'Done', icon: 'lucide:check-circle' }
 ];
 
-function TaskCard({ task, onDelete, isDeleting }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging: isDraggingInternal } = useSortable({ id: task._id.toString() });
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDraggingInternal ? 0.6 : 1
-  };
-
+function TaskCardContent({ task, onDelete, isDeleting, isOverlay = false }) {
   return (
-    <div ref={setNodeRef} style={style} className={`task-card ${isDraggingInternal ? 'task-card-dragging' : ''}`} {...attributes} {...listeners}>
+    <>
       <div className="task-card-header">
         <strong>{task.title}</strong>
-        <button
-          aria-label="Delete task"
-          type="button"
-          disabled={isDeleting}
-          onPointerDown={(event) => event.stopPropagation()}
-          onMouseDown={(event) => event.stopPropagation()}
-          onTouchStart={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            onDelete(task._id);
-          }}
-        >
-          <Icon icon="lucide:trash-2" width="18" height="18" />
-        </button>
+        {!isOverlay && (
+          <button
+            aria-label="Delete task"
+            type="button"
+            disabled={isDeleting}
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onTouchStart={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete(task._id);
+            }}
+          >
+            <Icon icon="lucide:trash-2" width="18" height="18" />
+          </button>
+        )}
       </div>
       <p>{task.description || 'No description provided.'}</p>
       {(task.startDate || task.endDate) && (
@@ -47,6 +42,21 @@ function TaskCard({ task, onDelete, isDeleting }) {
         </div>
       )}
       <div className="task-card-meta">Updated {new Date(task.updatedAt).toLocaleString()}</div>
+    </>
+  );
+}
+
+function TaskCard({ task, onDelete, isDeleting }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging: isDraggingInternal } = useSortable({ id: task._id.toString() });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDraggingInternal ? 0.35 : 1
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} className={`task-card ${isDraggingInternal ? 'task-card-dragging' : ''}`} {...attributes} {...listeners}>
+      <TaskCardContent task={task} onDelete={onDelete} isDeleting={isDeleting} />
     </div>
   );
 }
@@ -83,6 +93,7 @@ export default function App() {
   const [endDate, setEndDate] = useState('');
   const [error, setError] = useState('');
   const [deletingTaskId, setDeletingTaskId] = useState(null);
+  const [activeTaskId, setActiveTaskId] = useState(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -109,6 +120,11 @@ export default function App() {
         return acc;
       }, {}),
     [tasks]
+  );
+
+  const activeTask = useMemo(
+    () => tasks.find((task) => task._id.toString() === activeTaskId) || null,
+    [activeTaskId, tasks]
   );
 
   const handleSubmit = async (event) => {
@@ -206,22 +222,45 @@ export default function App() {
 
   const handleDragEnd = async (event) => {
     const { active, over } = event;
+    setActiveTaskId(null);
+
     if (!over || active.id === over.id) return;
 
     const activeTask = tasks.find((task) => task._id.toString() === active.id);
-    const nextColumn = columns.find((column) => column.key === over.id);
+    const overTask = tasks.find((task) => task._id.toString() === over.id);
+    const nextStatus = columns.some((column) => column.key === over.id) ? over.id : overTask?.status;
 
-    if (!activeTask || !nextColumn || activeTask.status === nextColumn.key) return;
+    if (!activeTask || !nextStatus || activeTask.status === nextStatus) return;
 
-    const response = await fetch(`/api/tasks/${activeTask._id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: nextColumn.key })
-    });
+    const previousTasks = tasks;
+    setTasks((current) =>
+      current.map((task) =>
+        task._id === activeTask._id
+          ? {
+              ...task,
+              status: nextStatus,
+              updatedAt: new Date().toISOString()
+            }
+          : task
+      )
+    );
 
-    if (response.ok) {
+    try {
+      const response = await fetch(`/api/tasks/${activeTask._id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus })
+      });
+
+      if (!response.ok) {
+        setTasks(previousTasks);
+        return;
+      }
+
       const updated = await response.json();
       setTasks((current) => current.map((task) => (task._id === updated._id ? updated : task)));
+    } catch {
+      setTasks(previousTasks);
     }
   };
 
@@ -229,7 +268,7 @@ export default function App() {
     <div className="app-shell">
       <header className="page-header">
         <div>
-          <h1>Nexus Task Management</h1>
+          <h1>Kiko Task Management</h1>
           <p>Kanban workflow for To Do, In Progress, and Done.</p>
         </div>
       </header>
@@ -260,7 +299,7 @@ export default function App() {
         {error && <div className="form-error">{error}</div>}
       </section>
 
-      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+      <DndContext sensors={sensors} onDragStart={({ active }) => setActiveTaskId(active.id)} onDragCancel={() => setActiveTaskId(null)} onDragEnd={handleDragEnd}>
         <main className="kanban-board">
           {columns.map((column) => (
             <Column
@@ -274,6 +313,13 @@ export default function App() {
             />
           ))}
         </main>
+        <DragOverlay>
+          {activeTask ? (
+            <div className="task-card task-card-overlay">
+              <TaskCardContent task={activeTask} isOverlay />
+            </div>
+          ) : null}
+        </DragOverlay>
       </DndContext>
     </div>
   );
