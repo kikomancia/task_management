@@ -1,0 +1,14 @@
+{
+  "name": "nexus-task-management",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "start:backend": "cd backend && npm start",
+    "install:all": "npm install --workspaces"
+  }
+}
